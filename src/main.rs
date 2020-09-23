@@ -1,30 +1,12 @@
+use rand::Rng;
 use std::thread;
 use std::time::Duration;
 
 mod pages;
 use pages::*;
 
-#[derive(Debug)]
-pub struct Process {
-    id: usize,
-    // The time the process would live
-    lifetime: usize,
-    // List of addresses
-    used_addresses: Vec<usize>,
-    // The number of times the process would reference the memory
-    memory_references: u32,
-}
-
-impl Process {
-    fn new(id: usize, lifetime: usize, used_addresses: Vec<usize>, memory_references: u32) -> Self {
-        Process {
-            id,
-            lifetime,
-            used_addresses,
-            memory_references,
-        }
-    }
-}
+mod process;
+use process::*;
 
 // Each process has its own (virtual) memory space After that it asks
 // the memory manager to allocate some memory And the memory manager
@@ -39,74 +21,66 @@ fn main() {
     let mut creation_times = (0..MAX_PROCESSES).collect::<Vec<usize>>();
 
     // Initialize the memory manager
-    const MEM_SIZE: usize = 4;
+    const PAGES: usize = 8;
+    const MEM_SIZE: usize = (PAGES + 1) * 4096;
     let mut memory_manager = MemoryManager::new(MEM_SIZE);
 
     let mut processes: Vec<Process> = Vec::new();
+
     // The system lifetime
     let mut current_tick = 0;
-
     let mut id = 0;
     while !processes.is_empty() || !creation_times.is_empty() {
         println!("Tick: {}", current_tick);
 
-        // Initialize a vector which stores the indeces of the creation_times to be deleted
-        let mut to_delete: Vec<usize> = Vec::new();
-
         // Go over the creation times and see if a new process should be created
-        for (index, creation_time) in creation_times.iter().enumerate() {
+        for creation_time in creation_times.iter() {
             // Create a new process if the time matches
             if current_tick == *creation_time {
-                to_delete.push(index);
-
-                let lifetime = 2;
-                let used_addresses = vec![0x00000000];
-                let memory_references = 2;
+                let max_lifetime = 5;
+                let max_address = MEM_SIZE;
+                let max_adresses_num = 10;
                 id += 1;
 
-                let process = Process::new(id, lifetime, used_addresses, memory_references);
+                let process = Process::new(id, max_lifetime, max_address, max_adresses_num);
                 memory_manager.register(process.id, MEM_SIZE);
                 processes.push(process);
                 println!(
-                    "A process with lifetime {} is created and registered",
+                    "A process[{}] with lifetime {} is created and registered",
+                    processes.last().unwrap().id,
                     processes.last().unwrap().lifetime
                 );
             }
         }
+        creation_times.retain(|time| time > &current_tick);
 
-        // Delete times of the already created processes
-        for index in to_delete {
-            creation_times.remove(index);
-        }
-
-        let mut to_delete: Vec<usize> = Vec::new();
-        for (position, process) in processes
-            .iter_mut()
-            .enumerate()
-            .filter(|(_, p)| p.lifetime > 0)
-        {
-            println!("Process[{:?}] is acting.", position);
-
-            // For now ask for your memory
-            if let Some(address) = process.used_addresses.first() {
-                memory_manager.allocate(process.id, *address)
+        for process in processes.iter_mut().filter(|p| p.lifetime > 0) {
+            // Determine if it would be a random address or one from working memory
+            let local = rand::random::<usize>() % 10 != 9;
+            let mut rng = rand::thread_rng();
+            if local {
+                println!("Process[{:?}] is writing to working memory.", process.id);
+                let page_pos = rng.gen_range(0, process.used_addresses.len());
+                let address = process.used_addresses[page_pos];
+                memory_manager.write(process.id, address);
+            } else {
+                println!(
+                    "Process[{:?}] is writing to non-working memory.",
+                    process.id
+                );
+                let address = rng.gen_range(0, MEM_SIZE / 4) * 4;
+                memory_manager.write(process.id, address);
             }
 
             process.lifetime -= 1;
-            if process.lifetime == 0 {
-                to_delete.push(position);
-            }
         }
+        processes.retain(|p| p.lifetime > 0);
 
-        for position in to_delete {
-            processes.remove(position);
-        }
+        println!("Processes left: {}", processes.len());
+        println!("Processes not spawned: {}", creation_times.len());
 
         current_tick += 1;
         println!();
         thread::sleep(Duration::from_millis(1000));
     }
-
-    // Upon creation of a process, create a new page table with demand paging
-    // Create a list of pages each process would use, set number of times the process would reference the memory
 }
