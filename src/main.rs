@@ -6,31 +6,22 @@ use pages::*;
 
 #[derive(Debug)]
 pub struct Process {
+    id: usize,
     // The time the process would live
     lifetime: usize,
     // List of addresses
     used_addresses: Vec<usize>,
     // The number of times the process would reference the memory
     memory_references: u32,
-    memory: VirtualMemory,
 }
 
 impl Process {
-    fn new(
-        lifetime: usize,
-        used_addresses: Vec<usize>,
-        memory_references: u32,
-        mem_size: usize,
-    ) -> Self {
-        let pages = (0..mem_size)
-            .map(|x| x * 1024 * 4)
-            .map(|address| VirtualPage::new(address))
-            .collect::<Vec<VirtualPage>>();
+    fn new(id: usize, lifetime: usize, used_addresses: Vec<usize>, memory_references: u32) -> Self {
         Process {
+            id,
             lifetime,
             used_addresses,
             memory_references,
-            memory: pages,
         }
     }
 }
@@ -48,13 +39,17 @@ fn main() {
     let mut creation_times = (0..MAX_PROCESSES).collect::<Vec<usize>>();
 
     // Initialize the memory manager
-    const MEM_SIZE: usize = 1024;
+    const MEM_SIZE: usize = 4;
     let mut memory_manager = MemoryManager::new(MEM_SIZE);
 
     let mut processes: Vec<Process> = Vec::new();
     // The system lifetime
     let mut current_tick = 0;
+
+    let mut id = 0;
     while !processes.is_empty() || !creation_times.is_empty() {
+        println!("Tick: {}", current_tick);
+
         // Initialize a vector which stores the indeces of the creation_times to be deleted
         let mut to_delete: Vec<usize> = Vec::new();
 
@@ -65,16 +60,15 @@ fn main() {
                 to_delete.push(index);
 
                 let lifetime = 2;
-                let used_addresses = vec![0x12341234];
+                let used_addresses = vec![0x00000000];
                 let memory_references = 2;
-                processes.push(Process::new(
-                    lifetime,
-                    used_addresses,
-                    memory_references,
-                    MEM_SIZE,
-                ));
+                id += 1;
+
+                let process = Process::new(id, lifetime, used_addresses, memory_references);
+                memory_manager.register(process.id, MEM_SIZE);
+                processes.push(process);
                 println!(
-                    "A process with lifetime {} is created",
+                    "A process with lifetime {} is created and registered",
                     processes.last().unwrap().lifetime
                 );
             }
@@ -95,7 +89,7 @@ fn main() {
 
             // For now ask for your memory
             if let Some(address) = process.used_addresses.first() {
-                memory_manager.allocate(&mut process.memory, *address)
+                memory_manager.allocate(process.id, *address)
             }
 
             process.lifetime -= 1;
@@ -108,8 +102,8 @@ fn main() {
             processes.remove(position);
         }
 
-        println!("Tick: {}", current_tick);
         current_tick += 1;
+        println!();
         thread::sleep(Duration::from_millis(1000));
     }
 
