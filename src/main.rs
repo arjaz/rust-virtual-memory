@@ -68,7 +68,7 @@ fn main() {
                     "Process[{:?}] is writing to non-working memory.",
                     process.id
                 );
-                let address = rng.gen_range(0, MEM_SIZE / 4) * 4;
+                let address = rng.gen_range(1, MEM_SIZE / 4) * 4;
                 memory_manager.write(process.id, address);
             }
 

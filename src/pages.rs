@@ -9,38 +9,39 @@ pub struct VirtualPage {
     presence: bool,
     reference: bool,
     modification: bool,
-    // Address the process would see
-    address: usize,
     // physical page address
-    paddress: Option<usize>,
-    swapped: bool,
+    paddress: usize,
 }
 
 impl VirtualPage {
-    pub fn new(address: usize) -> Self {
+    pub fn new() -> Self {
         VirtualPage {
             presence: false,
             reference: false,
             modification: false,
-            address,
-            paddress: None,
-            swapped: false,
+            paddress: VirtualPage::null(),
         }
+    }
+
+    pub fn _is_swapped(&self) -> bool {
+        !self.presence && self.reference
+    }
+
+    pub fn null() -> usize {
+        0
     }
 
     // Updates all necessary bits of the page
     pub fn alloc(&mut self, paddress: usize) {
-        self.swapped = false;
         self.reference = true;
         self.presence = true;
-        self.paddress = Some(paddress);
+        self.paddress = paddress;
     }
 
     // Swap out the page
     pub fn swap(&mut self) {
-        self.swapped = true;
-        self.paddress = None;
-        self.reference = false;
+        self.paddress = VirtualPage::null();
+        self.reference = true;
         self.presence = false;
     }
 
@@ -71,6 +72,8 @@ pub struct MemoryManager {
     processes_memory: HashMap<usize, VirtualMemory>,
     free_physical_pages: PhysicalMemory,
     busy_physical_pages: PhysicalMemory,
+    // Position of the last checked virtual page, resets on every new process being registered
+    hand: usize,
 }
 
 impl MemoryManager {
@@ -86,6 +89,7 @@ impl MemoryManager {
             processes_memory: HashMap::new(),
             free_physical_pages: physical_pages,
             busy_physical_pages: Vec::new(),
+            hand: 0,
         }
     }
 
@@ -95,10 +99,11 @@ impl MemoryManager {
             "This process is already registered"
         );
 
+        self.hand = 0;
+
         let virtual_memory = (0..mem_size)
             // Get addresses
-            .map(|x| x * PAGE_SIZE)
-            .map(VirtualPage::new)
+            .map(|_| VirtualPage::new())
             .collect::<VirtualMemory>();
 
         self.processes_memory.insert(id, virtual_memory);
@@ -109,39 +114,29 @@ impl MemoryManager {
             self.processes_memory.contains_key(&id),
             "The process is not managed by this memory manager."
         );
-        // Find the virtual page associated with this address
-        let page_address = address / 4096 * 4096;
-        let paddress = self
-            .processes_memory
-            .get_mut(&id)
-            .unwrap()
-            .iter_mut()
-            .find(|p| p.address == page_address)
-            .unwrap()
-            .paddress;
 
-        match paddress {
-            None => {
-                self.allocate(id, page_address);
-                let page = self
-                    .processes_memory
-                    .get_mut(&id)
-                    .unwrap()
-                    .iter_mut()
-                    .find(|p| p.address == page_address)
-                    .unwrap();
-                page.write();
-            }
-            Some(_) => {
-                let page = self
-                    .processes_memory
-                    .get_mut(&id)
-                    .unwrap()
-                    .iter_mut()
-                    .find(|p| p.address == page_address)
-                    .unwrap();
-                page.write();
-            }
+        // Find the virtual page associated with this address
+        let page_pos = address / 4096;
+        let paddress = self.processes_memory.get_mut(&id).unwrap()[page_pos].paddress;
+
+        let null_address = VirtualPage::null();
+        if paddress == null_address {
+            self.allocate(id, page_pos * 406);
+            let page = self
+                .processes_memory
+                .get_mut(&id)
+                .unwrap()
+                .get_mut(page_pos)
+                .unwrap();
+            page.write();
+        } else {
+            let page = self
+                .processes_memory
+                .get_mut(&id)
+                .unwrap()
+                .get_mut(page_pos)
+                .unwrap();
+            page.write();
         }
     }
 
@@ -156,7 +151,8 @@ impl MemoryManager {
             let virtual_memory = self.processes_memory.get_mut(&process_id).unwrap();
 
             assert!(
-                virtual_memory.iter().any(|p| p.address == address),
+                virtual_memory.len() >= (address / 4096),
+                // virtual_memory.iter().any(|p| p.address == address),
                 format!(
                     "Virtual memory doesn't contain that page[{:#010x}]",
                     address
@@ -164,6 +160,7 @@ impl MemoryManager {
             );
         }
 
+        let page_pos = address / 4096;
         // Try to map the physical page with the same address
         if let Some(position) = self
             .free_physical_pages
@@ -171,10 +168,10 @@ impl MemoryManager {
             .position(|p| p.address == address)
         {
             let virtual_memory = self.processes_memory.get_mut(&process_id).unwrap();
-            let virtual_page = virtual_memory
-                .iter_mut()
-                .find(|p| p.address == address)
-                .unwrap();
+            let virtual_page = virtual_memory.get_mut(page_pos).unwrap();
+            // .iter_mut()
+            // .find(|p| p.address == address)
+            // .unwrap();
             // NOTE: That's O(1), but doesn't preserve the ordering
             let physical_page = self.free_physical_pages.swap_remove(position);
             virtual_page.alloc(physical_page.address);
@@ -184,10 +181,7 @@ impl MemoryManager {
             // If there is no free physical page with the same address
             // map to the next free physical page
             let virtual_memory = self.processes_memory.get_mut(&process_id).unwrap();
-            let virtual_page = virtual_memory
-                .iter_mut()
-                .find(|p| p.address == address)
-                .unwrap();
+            let virtual_page = virtual_memory.get_mut(page_pos).unwrap();
 
             let physical_page = self.free_physical_pages.swap_remove(0);
             virtual_page.alloc(physical_page.address);
@@ -197,31 +191,37 @@ impl MemoryManager {
             );
             self.busy_physical_pages.push(physical_page);
         } else {
-            // If there are no free physical page left,
-            // use (TODO: clock) algorithm and swap some pages
-            let virtual_memory = self.processes_memory.get(&process_id).unwrap();
-            let virtual_page_pos = virtual_memory
-                .iter()
-                .position(|p| p.address == address)
-                .unwrap();
+            // If there are no free physical pages left,
+            // use clock algorithm and swap some pages
             'cycle: loop {
-                for (_id, virtual_memory) in self.processes_memory.iter_mut() {
-                    for freed_virtual_page in
-                        virtual_memory.iter_mut().filter(|p| p.paddress.is_some())
-                    {
-                        match freed_virtual_page.reference {
-                            true => freed_virtual_page.reference = false,
+                // Keep track of the current virtual page number to store it as a new hand
+                let mut current_page_num = 0;
+
+                for virtual_memory in self.processes_memory.values_mut() {
+                    for virtual_page in virtual_memory.iter_mut() {
+                        // Skip until we get to the current virtual page
+                        if self.hand != 0 {
+                            self.hand -= 1;
+                            continue;
+                        }
+                        // Check if the page should be swapped
+                        match virtual_page.reference {
+                            // Set the reference bit to false to indicate that the page has been inspected
+                            true => virtual_page.reference = false,
+                            // Swap the virtual page and allocate the physical one
                             false => {
-                                let paddress = freed_virtual_page.paddress;
-                                freed_virtual_page.swap();
-                                virtual_memory[virtual_page_pos].alloc(paddress.unwrap());
+                                let paddress = virtual_page.paddress;
+                                virtual_page.swap();
+                                virtual_memory[page_pos].alloc(paddress);
+                                self.hand = current_page_num;
                                 println!(
                                     "Page[{:#010x}] is busy, no free pages left, swapping out page[{:#010x}]",
-                                    address, virtual_memory[virtual_page_pos].address
+                                    address, page_pos * 4096
                                 );
                                 break 'cycle;
                             }
                         }
+                        current_page_num += 1;
                     }
                 }
             }
