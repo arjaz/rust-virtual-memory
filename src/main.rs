@@ -55,21 +55,36 @@ fn main() {
         creation_times.retain(|time| time > &current_tick);
 
         for process in processes.iter_mut().filter(|p| p.lifetime > 0) {
+            memory_manager.tick(process.id);
+
             // Determine if it would be a random address or one from working memory
             let local = rand::random::<usize>() % 10 != 9;
             let mut rng = rand::thread_rng();
             if local {
-                println!("Process[{:?}] is writing to working memory.", process.id);
                 let page_pos = rng.gen_range(0, process.used_addresses.len());
                 let address = process.used_addresses[page_pos];
-                memory_manager.write(process.id, address);
+                if rand::random::<bool>() {
+                    println!("Process[{:?}] is writing to working memory.", process.id);
+                    memory_manager.write(process.id, address);
+                } else {
+                    println!("Process[{:?}] is reading from working memory.", process.id);
+                    memory_manager.read(process.id, address);
+                }
             } else {
-                println!(
-                    "Process[{:?}] is writing to non-working memory.",
-                    process.id
-                );
                 let address = rng.gen_range(1, MEM_SIZE / 4) * 4;
-                memory_manager.write(process.id, address);
+                if rand::random::<bool>() {
+                    println!(
+                        "Process[{:?}] is writing to non-working memory.",
+                        process.id
+                    );
+                    memory_manager.write(process.id, address);
+                } else {
+                    println!(
+                        "Process[{:?}] is reading from non-working memory.",
+                        process.id
+                    );
+                    memory_manager.read(process.id, address);
+                }
             }
 
             process.lifetime -= 1;

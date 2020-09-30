@@ -23,17 +23,12 @@ impl VirtualPage {
         }
     }
 
-    pub fn _is_swapped(&self) -> bool {
-        !self.presence && self.reference
-    }
-
     pub fn null() -> usize {
         0
     }
 
     // Updates all necessary bits of the page
     pub fn alloc(&mut self, paddress: usize) {
-        self.reference = true;
         self.presence = true;
         self.paddress = paddress;
     }
@@ -41,12 +36,16 @@ impl VirtualPage {
     // Swap out the page
     pub fn swap(&mut self) {
         self.paddress = VirtualPage::null();
-        self.reference = true;
-        self.presence = false;
+        self.presence = true;
     }
 
     pub fn write(&mut self) {
+        self.reference = true;
         self.modification = true;
+    }
+
+    pub fn read(&mut self) {
+        self.reference = true;
     }
 }
 
@@ -93,6 +92,14 @@ impl MemoryManager {
         }
     }
 
+    pub fn tick(&mut self, id: usize) {
+        let memory = self.processes_memory.get_mut(&id).unwrap();
+        for page in memory.iter_mut() {
+            page.reference = false;
+            page.modification = false;
+        }
+    }
+
     pub fn register(&mut self, id: usize, mem_size: usize) {
         assert!(
             !self.processes_memory.contains_key(&id),
@@ -121,7 +128,7 @@ impl MemoryManager {
 
         let null_address = VirtualPage::null();
         if paddress == null_address {
-            self.allocate(id, page_pos * 406);
+            self.allocate(id, page_pos * 4096);
             let page = self
                 .processes_memory
                 .get_mut(&id)
@@ -140,6 +147,37 @@ impl MemoryManager {
         }
     }
 
+    pub fn read(&mut self, id: usize, address: usize) {
+        assert!(
+            self.processes_memory.contains_key(&id),
+            "The process is not managed by this memory manager."
+        );
+
+        // Find the virtual page associated with this address
+        let page_pos = address / 4096;
+        let paddress = self.processes_memory.get_mut(&id).unwrap()[page_pos].paddress;
+
+        let null_address = VirtualPage::null();
+        if paddress == null_address {
+            self.allocate(id, page_pos * 4096);
+            let page = self
+                .processes_memory
+                .get_mut(&id)
+                .unwrap()
+                .get_mut(page_pos)
+                .unwrap();
+            page.read();
+        } else {
+            let page = self
+                .processes_memory
+                .get_mut(&id)
+                .unwrap()
+                .get_mut(page_pos)
+                .unwrap();
+            page.read();
+        }
+    }
+
     // Try to map a virtual page with the specified address to a free physical page
     pub fn allocate(&mut self, process_id: usize, address: usize) {
         {
@@ -152,7 +190,6 @@ impl MemoryManager {
 
             assert!(
                 virtual_memory.len() >= (address / 4096),
-                // virtual_memory.iter().any(|p| p.address == address),
                 format!(
                     "Virtual memory doesn't contain that page[{:#010x}]",
                     address
@@ -169,9 +206,6 @@ impl MemoryManager {
         {
             let virtual_memory = self.processes_memory.get_mut(&process_id).unwrap();
             let virtual_page = virtual_memory.get_mut(page_pos).unwrap();
-            // .iter_mut()
-            // .find(|p| p.address == address)
-            // .unwrap();
             // NOTE: That's O(1), but doesn't preserve the ordering
             let physical_page = self.free_physical_pages.swap_remove(position);
             virtual_page.alloc(physical_page.address);
