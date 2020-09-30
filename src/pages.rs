@@ -236,6 +236,7 @@ impl MemoryManager {
                         // Skip until we get to the current virtual page
                         if self.hand != 0 {
                             self.hand -= 1;
+                            current_page_num += 1;
                             continue;
                         }
                         // Check if the page should be swapped
